@@ -824,7 +824,9 @@ els.downloadReport.addEventListener("click", () => {
 });
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  // Must also escape quotes: output can land inside HTML attribute values via
+  // innerHTML, not just text content — see dashboard.js's matching fix.
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
 function truncate(s, n) {
@@ -842,6 +844,10 @@ els.run.addEventListener("click", () => {
     els.prompt.focus();
     return;
   }
+  // A one-off manual "Preview this page" click used to permanently disable the live
+  // X-ray auto-update (render()'s `!previewShown` guard) for the rest of the popup
+  // session — resetting here means a real task's live frames resume updating again.
+  previewShown = false;
   chrome.runtime.sendMessage({
     type: MSG.RUN_TASK,
     payload: {
@@ -874,8 +880,6 @@ chrome.runtime.sendMessage({ type: MSG.GET_STATE }).then((res) => {
     if (res.state.serverUrl) els.serverUrl.value = res.state.serverUrl;
     if (res.state.maxIterations) els.maxIterations.value = res.state.maxIterations;
     els.localOnly.checked = !!res.state.localOnly;
-    // STATE doesn't persist a multiAgentEnabled field today — default to checked
-    // unless a matching field happens to exist, so this stays a no-op until it does.
     els.multiAgent.checked = !!res.state.multiAgentEnabled;
     updateChipsVisibility();
   }
