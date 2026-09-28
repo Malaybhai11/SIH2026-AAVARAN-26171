@@ -51,9 +51,12 @@ export function crop(img, { x, y, w, h }) {
 }
 
 /**
- * 64-bit difference hash (9x8 grayscale). Two frames with Hamming distance ≤ 4 are
+ * 64-bit difference hash (9x8 grayscale). Two frames with Hamming distance ≤ 3 are
  * treated as "same screen" so vision results can be reused — the main lever for
- * client-side compute: most agent steps don't change the pixels much.
+ * client-side compute: most agent steps don't change the pixels much. Kept tight
+ * (not looser) deliberately: a same-layout frame where only a text value changed
+ * (e.g. a name typed into a field) must not be treated as identical, or newly
+ * appeared PII would silently reuse the previous frame's unscanned result.
  */
 export function dHash(img) {
   const s = resize(img, 9, 8);
