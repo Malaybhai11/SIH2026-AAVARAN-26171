@@ -19,7 +19,11 @@ function card(k, v) {
 }
 
 function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  // Must also escape quotes: output is used inside HTML ATTRIBUTE values (e.g.
+  // data-key="${escapeHtml(f.key)}") via innerHTML, not just text content — an
+  // unescaped " in a fact key (reachable via the dashboard's Import-from-JSON) would
+  // break out of the attribute and inject arbitrary markup/attributes.
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
 function render(s) {
