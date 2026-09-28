@@ -1,7 +1,11 @@
-// Thin shim over the extension API so the rest of the code never touches `chrome.*`
-// directly. This is the Firefox seam: `browser.*` is promise-native, `chrome.*` is
-// callback-based but modern Chrome also returns promises for most APIs, so for MV3
-// Chrome we can use `chrome` as-is. Firefox parity = point this at `browser`.
+// Thin shim over the extension API, intended so the rest of the code never touches
+// `chrome.*` directly. NOT currently wired in: background.js, content.js, popup.js,
+// dashboard.js and offscreen.js all call `chrome.*` directly rather than importing
+// from here, so this is not yet an actual Firefox-portability seam — swapping to
+// Firefox today means fixing each of those call sites individually, not just
+// pointing this file at `browser`. Left in place as the intended target for that
+// work (perceptionHost.firefox.js already exists for the perception-host half of
+// the same effort), not as a claim that the seam exists yet.
 
 const api = globalThis.browser ?? globalThis.chrome;
 
