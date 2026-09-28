@@ -493,8 +493,12 @@ test("Valid Token Release: EMAIL -> email field on trusted origin -> ALLOW", () 
     labelText: "Work Email",
   };
   const action = { type: "type", targetId: "email_field", text: emailToken };
+  // Same origin as the token's provenance (setupTestVault's sourceOrigin) — not a
+  // TRUSTED_DOMAINS destination, since that blanket bypass has been removed: a
+  // recognized platform alone no longer overrides same-origin binding (see
+  // isAllowedOrigin's rule 4 removal in tokenReleasePolicy.js).
   const context = {
-    destinationOrigin: "https://mail.google.com",
+    destinationOrigin: "https://trusted.example.com",
     targetFieldMeta: emailField,
   };
 
