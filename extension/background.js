@@ -93,6 +93,7 @@ function freshState() {
     status: STATUS.IDLE,
     serverUrl: DEFAULTS.serverUrl,
     localOnly: false,
+    multiAgentEnabled: DEFAULTS.multiAgentEnabled,
     tabId: null,
     targetCount: 0,
     log: [],
@@ -312,6 +313,13 @@ function normalizeUrl(url) {
   }
 }
 
+// Mirrors server/llm/action_schema.json's action.type enum — the server's own
+// contract for what an "action" status response may contain.
+const VALID_ACTION_TYPES = new Set([
+  "click", "scroll", "type", "wait", "extract", "navigate", "open_tab", "switch_tab", "back",
+  "select", "check", "hover", "press_key", "fill_form", "remember", "note",
+  "save_image", "compile_report",
+]);
 const NAV_ACTIONS = new Set(["navigate", "open_tab", "switch_tab", "back"]);
 // Actions where repeating the exact same target with no new page/state is a strong
 // loop signal (unlike scroll/wait/extract, which are *expected* to repeat).
@@ -1005,6 +1013,14 @@ async function runSubLoop(sub, ctx) {
     }
     if (sub.status === STATUS.ERROR) break;
     if (visual?.error) subLog(sub, `vision degraded: ${visual.error}`, "warn");
+    // A batched NER call throwing inside content.js silently drops all model-based
+    // PII detection for this snapshot (regex rules alone still run) — surfaced here
+    // instead of only a console.warn, so it's visible in the Log tab rather than
+    // invisibly weakening protection for whatever page this snapshot was taken on.
+    if (snapshot.nerDegraded) {
+      STATE.privacy.nerDegradedCount = (STATE.privacy.nerDegradedCount || 0) + 1;
+      subLog(sub, `NER unavailable this step (${snapshot.nerDegraded}); PII detection fell back to rules only`, "warn");
+    }
     sub.lastVisual = visual && { ...visual, redactedImage: undefined };
     sub.lastRedactedImage = visual?.redactedImage ?? null;
     STATE.privacy.boxesPainted += visual?.painted ?? 0;
@@ -1152,7 +1168,18 @@ async function runSubLoop(sub, ctx) {
       break;
     }
 
-    // status === "action"
+    // Anything other than the two statuses handled above must be "action" per the
+    // API contract — but a malformed/unexpected server response (missing status,
+    // an action with no or unrecognized type) used to fall straight through to
+    // dispatch, where it silently failed as "unknown action undefined/<type>"
+    // instead of surfacing a clear contract violation at the point it was received.
+    if (resp.status !== "action" || !VALID_ACTION_TYPES.has(resp.action?.type)) {
+      sub.status = STATUS.ERROR;
+      sub.error = `server: malformed response — status=${JSON.stringify(resp.status)}, action.type=${JSON.stringify(resp.action?.type)}`;
+      subLog(sub, sub.error, "error");
+      break;
+    }
+
     mergeAccumulated(sub, resp.extracted ?? []);
     let a = resp.action || {};
 
@@ -1367,37 +1394,21 @@ async function runSubLoop(sub, ctx) {
         const dec = rehydrated.__securityDecision;
         subLog(sub, `Privacy system BLOCKED release of ${dec.blockedToken} (${dec.blockedType}): ${dec.reason}`, "warn");
 
-        while (STATE.pendingConfirmation && !ctx.isCancelled()) {
-          await new Promise((r) => setTimeout(r, 500));
-        }
-        if (ctx.isCancelled()) break;
-
-        const prevSubStatus = sub.status;
-        const prevStateStatus = STATE.status;
-        STATE.pendingConfirmation = {
-          subId: sub.id,
+        // Shares awaitConfirmation with the B1 checkTokenRelease gate above and the
+        // risky-action gate below, instead of re-implementing the same claim/wait/
+        // timeout/resolve loop by hand a second time — the hand-rolled version this
+        // replaced had no timeout at all (an unattended run with nobody to answer
+        // would hang this sub-agent's loop forever) and, being a separate code path,
+        // could silently drift from awaitConfirmation's behavior over time.
+        const allowed = await awaitConfirmation(sub, ctx, {
           actionType: a.type,
           targetId: a.targetId ?? null,
-          blockedToken: dec.blockedToken,
-          blockedType: dec.blockedType,
-          destinationOrigin,
           description: `Privacy System BLOCKED Token Release: Attempted release of ${dec.blockedToken} (${dec.blockedType}) to ${destinationOrigin || "unknown origin"}. Reason: ${dec.reason}. Allow user override?`,
-          resolution: null,
-        };
-        STATE.status = STATUS.AWAITING_CONFIRMATION;
-        sub.status = STATUS.AWAITING_CONFIRMATION;
-        await ctx.onUpdate();
+          kind: "token_release",
+        });
+        if (ctx.isCancelled()) break;
 
-        while (!STATE.pendingConfirmation?.resolution && !ctx.isCancelled()) {
-          await new Promise((r) => setTimeout(r, 500));
-        }
-        const resolution = ctx.isCancelled() ? "deny" : STATE.pendingConfirmation?.resolution;
-        STATE.pendingConfirmation = null;
-        STATE.status = prevStateStatus;
-        sub.status = prevSubStatus;
-        await ctx.onUpdate();
-
-        if (resolution === "allow") {
+        if (allowed) {
           subLog(sub, `Token release explicitly authorized by user for ${dec.blockedToken}`);
           a = rehydrateAction(a, VAULT, {
             destinationOrigin,
@@ -1831,6 +1842,11 @@ async function startTask({ prompt, serverUrl, localOnly, multiAgentEnabled, maxI
     Math.min(parseInt(maxIterations, 10) || DEFAULTS.maxIterations, DEFAULTS.maxIterationsCeiling),
   );
   const multiAgent = multiAgentEnabled === undefined ? DEFAULTS.multiAgentEnabled : !!multiAgentEnabled;
+  // Persisted on STATE so GET_STATE (popup reopen) can restore the checkbox to what
+  // this run actually used — it used to be a local-only variable, so the popup's
+  // "Multi-agent mode" checkbox always reset to unchecked on reopen regardless of
+  // whether multi-agent was really running.
+  STATE.multiAgentEnabled = multiAgent;
 
   const restricted = /^(chrome|edge|about|chrome-extension|devtools|view-source):/i.test(tab.url || "");
   if (restricted) {
