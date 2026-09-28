@@ -126,3 +126,11 @@ if (overallPct !== null && overallPct >= 40) {
   console.error("FAIL: image gate is sending on 40%+ of steps");
   process.exitCode = 1;
 }
+// "Done when" is under-40% AND no drop in task success vs. always sending — tasksPassed
+// was computed and written to the JSON but never actually gated the exit code, so a
+// change that broke every demo task while still keeping images under 40% would still
+// report as a pass.
+if (passedN < results.length) {
+  console.error(`FAIL: ${results.length - passedN}/${results.length} task(s) did not pass`);
+  process.exitCode = 1;
+}
