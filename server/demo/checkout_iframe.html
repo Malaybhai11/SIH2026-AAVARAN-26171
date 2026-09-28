@@ -22,7 +22,11 @@
 <script>
   // Point the iframe at whichever of localhost/127.0.0.1 the top page is NOT
   // currently on, so this is a genuine cross-origin frame from either host.
+  // Cache-busted (?v=) because this src is assigned dynamically via JS, so a
+  // browser hard-reload of the top page does not reliably force-refetch it —
+  // without this, a stale cached response (e.g. from before a server header
+  // change) can keep being reused silently.
   const otherHost = location.hostname === "127.0.0.1" ? "localhost" : "127.0.0.1";
-  document.getElementById("pay-frame").src = `${location.protocol}//${otherHost}:${location.port}/demo/payment_widget.html`;
+  document.getElementById("pay-frame").src = `${location.protocol}//${otherHost}:${location.port}/demo/payment_widget.html?v=${Date.now()}`;
 </script>
 </body></html>
