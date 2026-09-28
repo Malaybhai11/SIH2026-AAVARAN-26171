@@ -9,7 +9,12 @@ import { detectRuleSpans, aadhaarValid, luhnValid } from "./redact.js";
 
 // Specific negative indicator keywords that indicate a general-purpose,
 // narrative, or commentary text field that must NEVER receive sensitive identifiers.
-const NEGATIVE_INDICATORS_RE =
+// Exported so every field-category heuristic (this file's classifyField AND
+// privacyPipeline.js's guessFieldPiiCategory) shares one definition — the two used
+// to diverge (classifyField suppressed on these keywords, guessFieldPiiCategory
+// didn't), so a field like "Message (include your phone number if you have one)"
+// could get a different release verdict depending on which check ran.
+export const NEGATIVE_INDICATORS_RE =
   /\b(comment|comments|message|messages|description|feedback|query|queries|remark|remarks|review|reviews|note|notes|bio|about|instruction|instructions|search|post|body|reason)\b/i;
 
 // Regex patterns to detect positive evidence for each sensitive data category
