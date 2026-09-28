@@ -23,4 +23,18 @@
   <div><label for="exp">Expiry</label><input id="exp" autocomplete="cc-exp" value="12/28" data-pii="CC"></div>
   <div><label for="cvv">CVV</label><input id="cvv" autocomplete="cc-csc" value="123" data-pii="CVV"></div>
 </div>
+<button type="button" style="margin-top:12px;background:#1d2433;color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:12px;cursor:pointer" onclick="simulateFieldRedaction()">Simulate Aavaran pixel redaction</button>
+<script>
+// Client-side stand-in for the extension's own pixelPii.js field-boxing (fieldKind()
+// -> CARD for autocomplete="cc-*"): a guaranteed-to-render visual for the recording,
+// independent of whether the real extension is attached/mid-scan during a take.
+function simulateFieldRedaction() {
+  document.querySelectorAll('#ccname, #cc, #exp, #cvv').forEach((el) => {
+    const box = document.createElement('div');
+    box.textContent = el.id === 'ccname' ? '[NAME]' : el.id === 'cvv' ? '[CVV]' : '[CARD]';
+    box.style.cssText = 'background:#000;color:#38bdf8;font:inherit;padding:8px;border-radius:6px;text-align:center;letter-spacing:1px';
+    el.replaceWith(box);
+  });
+}
+</script>
 </body></html>
