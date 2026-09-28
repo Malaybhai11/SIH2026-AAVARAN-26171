@@ -357,6 +357,7 @@ export class PerceptionEngine {
           const ocr = await this.load("ocr");
           const t4 = performance.now();
           spans = [];
+          let thisRegionFailed = false;
           try {
             const { words } = await ocr.recognize(c);
             if (words.length) {
@@ -368,10 +369,15 @@ export class PerceptionEngine {
             }
           } catch (e) {
             ocrError = String(e?.message || e);
+            thisRegionFailed = true;
           }
           this.time("ocr", performance.now() - t4);
           newOcrRuns++;
-          this.ocrCache.set(key, spans);
+          // A transient OCR failure must never be cached as "no PII here" — that would
+          // permanently blind every later frame with these same pixels (same dHash) to
+          // whatever text was actually in this region. Only a genuine, completed scan
+          // (even one that legitimately found nothing) is cache-worthy.
+          if (!thisRegionFailed) this.ocrCache.set(key, spans);
         }
         for (const s of spans) ocrSpans.push({ ...s, x: s.x + c.offsetX, y: s.y + c.offsetY });
       }
@@ -467,7 +473,11 @@ export class PerceptionEngine {
     for (const b of boxes) {
       const pad = b.pad ?? 2;
       const x = (b.x - pad) * k, y = (b.y - pad) * k, w = (b.w + 2 * pad) * k, h = (b.h + 2 * pad) * k;
-      if (w <= 0 || h <= 0) continue;
+      // NaN comparisons are always false, so a malformed upstream box (missing/NaN
+      // x/y/w/h) would fall through here, fillRect(NaN, ...) would silently no-op per
+      // the Canvas spec, and painted++ below would still count it as redacted — the
+      // caller would believe this region was blacked out when nothing was drawn.
+      if (!(w > 0) || !(h > 0) || !Number.isFinite(x) || !Number.isFinite(y)) continue;
       ctx.fillStyle = "#000";
       ctx.fillRect(x, y, w, h);
       painted++;
