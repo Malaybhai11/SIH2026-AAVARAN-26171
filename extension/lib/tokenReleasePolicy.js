@@ -113,13 +113,14 @@ export function isAllowedOrigin(destOrigin, sourceOrigin = null, customAllowed =
     } catch {}
   }
 
-  // 4. Recognized project domains
-  for (const domain of TRUSTED_DOMAINS) {
-    if (hostname === domain || hostname.endsWith(`.${domain}`)) {
-      return true;
-    }
-  }
-
+  // Recognized major platforms (TRUSTED_DOMAINS) are deliberately NOT auto-allowed
+  // here regardless of sourceOrigin: that would let a token scraped from ANY site be
+  // released to any of these ~15 domains, defeating the same-origin binding this
+  // whole function exists to enforce (a value captured on siteA.com must stay bound
+  // to siteA.com, not to "any well-known platform"). A release that doesn't match
+  // rules 1-3 falls through to fail-closed BLOCK below; the caller's userApproved
+  // override (see verifyTokenReleasePolicy) is the sanctioned path for a legitimate
+  // cross-origin release the automated policy can't itself vouch for.
   return false;
 }
 
