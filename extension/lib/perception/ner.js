@@ -77,13 +77,15 @@ export class PiiNer {
    * @returns {Promise<Array<Array<{start,end,type,score,value}>>>} spans per text
    */
   async tagBatch(texts, batchSize = 16) {
-    // Names and places carry at least one uppercase letter in real UI text; strings
-    // without one skip the model entirely (most of a page: numbers, labels, prose
-    // fragments). Long strings are chunked, then spans are shifted back.
+    // Cheap pre-filter: strings with no letters at all (numbers, prices, punctuation)
+    // can't contain a name/place, so skip the model entirely for those. Deliberately
+    // NOT gated on uppercase specifically — casual/lowercase text ("rohan mehta",
+    // usernames, lowercase-typed form values) is common real-world PII and must still
+    // reach the model. Long strings are chunked, then spans are shifted back.
     const results = texts.map(() => []);
     const jobs = [];
     texts.forEach((t, i) => {
-      if (!t || !/\p{Lu}/u.test(t)) return;
+      if (!t || !/\p{L}/u.test(t)) return;
       for (const c of this.chunk(t)) jobs.push({ i, ...c });
     });
     jobs.sort((a, b) => a.text.length - b.text.length); // similar lengths batch with less padding
@@ -160,7 +162,15 @@ export class PiiNer {
     };
     for (let w = 0; w < enc.words.length; w++) {
       const lab = wordLab.get(w);
-      if (!lab) break; // truncated
+      // A missing label means this one word fell outside the model's token budget
+      // (e.g. one abnormally long word ate the chunk's remaining tokens) — treat it
+      // like an "O" and keep going, rather than abandoning every word after it in
+      // this chunk. Genuine end-of-sequence truncation just means the loop runs out
+      // of words with no further labels to find, which this handles the same way.
+      if (!lab) {
+        close();
+        continue;
+      }
       const [bio, ent] = lab.label === "O" ? ["O", null] : lab.label.split(/-(.+)/);
       const word = enc.words[w];
       if (bio === "O") {
