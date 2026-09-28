@@ -68,7 +68,6 @@ def _prepare_llm_input(req: StepRequest) -> tuple[dict, Any]:
     string field the client sends, plus toasts. Shared by the sync and streaming routes
     so both get identical privacy guarantees."""
     QA_STATS["requests"] += 1
-    record_request(req.model_dump())
 
     dom_dicts = [n.model_dump() for n in req.sanitizedDom]
     qa = check_and_repair(dom_dicts)
@@ -100,6 +99,16 @@ def _prepare_llm_input(req: StepRequest) -> tuple[dict, Any]:
                         QA_STATS["leaked_spans"] += sum(hits.values())
                     clean_toasts.append(repaired)
             llm_input["pageMeta"]["toasts"] = clean_toasts
+
+    # Recorded AFTER repair, not the raw req.model_dump(): the whole point of this QA
+    # layer is to catch PII that slipped past client-side redaction (its own docstring:
+    # "defense in depth... re-redact any residual PII"), but that only matters if the
+    # audit trail (requests.jsonl when AUDIT_LOG=1, and the in-memory RECENT deque
+    # backing GET /agent/last-received) reflects the repaired data too — recording the
+    # pre-repair payload would let a client-side redaction bug write raw PII straight
+    # to disk and serve it back over /agent/last-received, the exact leak this layer
+    # exists to prevent from ever reaching the LLM in the first place.
+    record_request(llm_input)
 
     return llm_input, qa
 
