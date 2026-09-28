@@ -18,6 +18,7 @@ import { MSG } from "./messages.js";
 import { perception, ensureOffscreen } from "./perceptionClient.js";
 import { Vault, detectRuleSpans, applySpans, hasResidualPII, redactText, scrubLog } from "./redact.js";
 import { verifyTokenReleasePolicy } from "./tokenReleasePolicy.js";
+import { NEGATIVE_INDICATORS_RE } from "./fieldCompatibility.js";
 
 export function isTransientNavigationError(err) {
   const msg = String(err?.message || err || "");
@@ -691,6 +692,11 @@ const FIELD_CATEGORY_RULES = [
 /** Guess what kind of value a form field expects from its visible label/placeholder text. */
 export function guessFieldPiiCategory(labelText) {
   const t = String(labelText || "");
+  // A comment/message/description/etc. field must never be treated as a legitimate
+  // sink for a PII category just because it happens to mention one in passing (e.g.
+  // "Message (include your phone number if you have one)") — same suppression rule
+  // classifyField applies, kept in sync via the shared NEGATIVE_INDICATORS_RE.
+  if (NEGATIVE_INDICATORS_RE.test(t)) return "unknown";
   for (const [re, cat] of FIELD_CATEGORY_RULES) if (re.test(t)) return cat;
   return "unknown";
 }
