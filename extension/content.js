@@ -96,6 +96,9 @@ async function handleExtract({ targetCount = 10, collect = false, vault: vaultSt
   // 3. Text payload tokenisation (same engine + same vault => same tokens)
   const redactT0 = performance.now();
   let nerTag;
+  let nerDegraded = null; // set below if the batched NER call throws — surfaced to
+  // the caller so a silent fallback to regex-only detection isn't invisible to the
+  // user (this page's whole PII detection quality just dropped for this snapshot).
   if (ner) {
     // one batched NER call for every payload string; the engine caches per string
     const strings = new Set();
@@ -108,6 +111,7 @@ async function handleExtract({ targetCount = 10, collect = false, vault: vaultSt
       spans = await nerBatch(list);
     } catch (e) {
       console.warn("[content] NER failed; rules only", e);
+      nerDegraded = String(e?.message || e);
     }
     const byText = new Map(list.map((t, i) => [t, spans[i] || []]));
     nerTag = async (t) => byText.get(t) ?? [];
@@ -138,12 +142,20 @@ async function handleExtract({ targetCount = 10, collect = false, vault: vaultSt
   const title = (await redactText(document.title || "", { ...opts, provenanceMeta: { sourceOrigin: location.origin, sourceFieldType: "title" } })).text;
 
   // pixel boxes get the SAME token as the text layer ("EMAIL_1") so the redacted
-  // screenshot and the DOM payload tell the server one consistent story
+  // screenshot and the DOM payload tell the server one consistent story. CARD/*_FIELD
+  // values (card numbers, CVV, passwords, OTP) are the exception: their raw value
+  // never reaches the DOM text layer at all (domExtractor withholds it), so they must
+  // never be registered as a releasable Vault token either — labelOnly() gives them a
+  // numbered "CARD_1"/"CARD_2" label for the screenshot without ever making the real
+  // value resolvable/rehydratable, so multiple sensitive fields on one page still get
+  // distinguishable box labels instead of an identical, ambiguous "[CARD]".
   const boxes = pixel.boxes.map((b) => {
-    const tok = b.value && !/_FIELD$|^CARD$/.test(b.type)
-      ? vault.tokenFor(b.type, b.value, { sourceOrigin: location.origin, sourceFieldType: b.source || "screenshot_box", origin: location.origin })
-      : `[${b.type}]`;
-    const label = vault.labelFor ? vault.labelFor(tok) : tok.slice(1, -1);
+    const isFieldOnly = /_FIELD$|^CARD$/.test(b.type);
+    const label = b.value && isFieldOnly
+      ? vault.labelOnly(b.type, b.value)
+      : b.value
+        ? vault.labelFor(vault.tokenFor(b.type, b.value, { sourceOrigin: location.origin, sourceFieldType: b.source || "screenshot_box", origin: location.origin }))
+        : b.type;
     return { x: b.x, y: b.y, w: b.w, h: b.h, type: b.type, label, source: b.source };
   });
   const redactMs = Math.round(performance.now() - redactT0);
@@ -161,6 +173,7 @@ async function handleExtract({ targetCount = 10, collect = false, vault: vaultSt
       // hide MORE from the user than the redaction layer already does
       injectionAttempts: injectionHits,
     },
+    nerDegraded,
     exhausted: extraction.exhausted ?? false,
     viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1, scrollX: window.scrollX, scrollY: window.scrollY },
     // structural counts (no text/values) fused with MobileCLIP for the screen state
