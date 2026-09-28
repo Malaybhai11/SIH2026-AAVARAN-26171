@@ -94,9 +94,11 @@ const report = {
   model: "YuNet 2023mar FP32 (0.2 MB)",
   scoreThresh: THR,
   tp, fp, fn,
-  precision: +(tp / (tp + fp)).toFixed(3),
-  recall: +(tp / (tp + fn)).toFixed(3),
-  recallBySize: Object.fromEntries(Object.entries(bySize).map(([k, [h, n]]) => [k, { recall: +(h / n).toFixed(3), n }])),
+  // Zero-denominator guards: an empty sample/bucket would otherwise write NaN into
+  // this JSON, which summary.mjs reads straight through with no NaN handling either.
+  precision: tp + fp > 0 ? +(tp / (tp + fp)).toFixed(3) : null,
+  recall: tp + fn > 0 ? +(tp / (tp + fn)).toFixed(3) : null,
+  recallBySize: Object.fromEntries(Object.entries(bySize).map(([k, [h, n]]) => [k, { recall: n > 0 ? +(h / n).toFixed(3) : null, n }])),
   avgMsPerImage_1thread: +(ms / sample.length).toFixed(1),
 };
 console.log(JSON.stringify(report, null, 2));
