@@ -12,6 +12,7 @@ import {
   egressGate,
   tokenizeOutgoing,
   sanitizeUrl,
+  isTransientNavigationError,
 } from "./privacyPipeline.js";
 import { Vault, redactText } from "./redact.js";
 
@@ -206,3 +207,23 @@ test("sanitizeUrl: unaffected by redaction mode (path-only, no PII types surroga
   const v = new Vault(null, { mode: "surrogate" });
   assert.equal(sanitizeUrl("https://bank.example/accounts?id=123", v), "https://bank.example/accounts?…");
 });
+
+test("isTransientNavigationError detects bfcache and closed message channels", () => {
+  assert.equal(
+    isTransientNavigationError(
+      new Error("The page keeping the extension port is moved into back/forward cache, so the message channel is closed."),
+    ),
+    true,
+  );
+  assert.equal(
+    isTransientNavigationError("The page keeping the extension port is moved into back/forward cache, so the message channel is closed."),
+    true,
+  );
+  assert.equal(isTransientNavigationError("Could not establish connection. Receiving end does not exist."), true);
+  assert.equal(isTransientNavigationError("The message port closed before a response was received."), true);
+  assert.equal(isTransientNavigationError("Frame with ID 4 does not exist."), true);
+  assert.equal(isTransientNavigationError("no frame with id 12"), true);
+  assert.equal(isTransientNavigationError("SyntaxError: Unexpected token"), false);
+  assert.equal(isTransientNavigationError(null), false);
+});
+

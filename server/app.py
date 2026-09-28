@@ -51,6 +51,7 @@ app.include_router(audit_view_router)
 # Synthetic demo sites (bank KYC, webmail, social feed, checkout, registration form).
 # Every PII element carries data-pii / data-face ground-truth labels used by eval/.
 app.mount("/demo", StaticFiles(directory=Path(__file__).parent / "demo", html=True), name="demo")
+app.mount("/eval/results", StaticFiles(directory=Path(__file__).resolve().parents[1] / "eval" / "results"), name="eval_results")
 
 
 @app.get("/health")

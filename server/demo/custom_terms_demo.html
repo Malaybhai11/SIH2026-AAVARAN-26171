@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ISRO Mission Control (B3 Custom Terms Verification) — Aavaran</title>
+  <link rel="stylesheet" href="demo.css">
+  <style>
+    .badge-b3 { background: #ede9fe; color: #5b21b6; font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+    .secret-tag { background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; font-weight: bold; }
+    .interactive-card { background: #fdf4ff; border: 1px solid #f0abfc; border-radius: 8px; padding: 14px; }
+  </style>
+</head>
+<body>
+<header class="top" style="background:#1e1b4b">
+  <b>🛰️ ISRO Space Research Organization — Internal Mission Ops</b>
+  <nav style="margin-left:auto;display:flex;gap:14px;align-items:center">
+    <span class="badge-b3">Workstream B3 (P1)</span>
+    <a href="index.html" style="color:#c7d2fe;text-decoration:none">← Back to Hub</a>
+  </nav>
+</header>
+
+<main style="max-width:960px">
+  <div class="interactive-card">
+    <h3 style="margin:0 0 6px;color:#701a75">🎯 Feature B3 Proof of Implementation: Custom Sensitive Terms & Policy</h3>
+    <p style="margin:0;font-size:13px;color:#4a044e;line-height:1.5">
+      Generic NER and regex models only look for public PII (names, phone, Aadhaar).
+      Organizations have internal trade secrets (e.g. ISRO payload codenames).
+      Feature B3 lets users define <b>Custom Sensitive Terms & Regex Patterns</b> in the popup and configure <b>Per-Site Policies</b> (<code>local-only</code>, <code>no-screenshot</code>).
+    </p>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Mission Telemetry & Classified Assets</h2>
+    <p class="muted">Notice the classified codenames below. Test by adding <code>PROJECT-CHANDRAYAAN-IV</code> into Aavaran Settings &rarr; Custom Terms:</p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:12px;border-radius:8px">
+        <label>Active Mission Codename:</label>
+        <div style="font-size:15px;margin-top:4px"><span class="secret-tag">PROJECT-CHANDRAYAAN-IV-ROVER</span></div>
+      </div>
+
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:12px;border-radius:8px">
+        <label>Spectrometer Sensor ID:</label>
+        <div style="font-size:15px;margin-top:4px"><span class="secret-tag">SURYA-L1-HIGHRES-SPECTROMETER</span></div>
+      </div>
+
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:12px;border-radius:8px">
+        <label>Lead Mission Director:</label>
+        <div>Dr. Vikramaditya Sen (ID: <span class="secret-tag">ISRO-DIR-8842-X</span>)</div>
+      </div>
+
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;padding:12px;border-radius:8px">
+        <label>Uplink Encryption Key Reference:</label>
+        <div style="font-family:monospace;font-size:13px">KEY-REF: <span class="secret-tag">SEC-CRYPT-ALPHA-99</span></div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;display:flex;gap:12px">
+      <button type="button" style="background:#701a75" onclick="simulateCustomRedaction()">Simulate Custom Term Redaction</button>
+      <button type="button" class="ghost" onclick="resetTerms()">Reset View</button>
+    </div>
+  </div>
+
+  <div class="card" id="proof-panel" style="display:none;background:#faf5ff;border-color:#d8b4fe">
+    <h3 style="margin-top:0;color:#581c87">Result Verified against <code>eval/results/custom_terms.json</code></h3>
+    <pre style="background:#fff;border:1px solid #e9d5ff;padding:12px;border-radius:6px;font-size:12px;color:#581c87">
+{
+  "customTerm": { "label": "Codename", "value": "PROJECT-CHANDRAYAAN-IV-ROVER" },
+  "redactedInText": true,
+  "redactedInPixels": true,
+  "rawValueLeaked": false,
+  "sitePolicy": {
+    "hostname": "localhost",
+    "policy": "local-only",
+    "newServerRequests": 0
+  }
+}
+    </pre>
+  </div>
+</main>
+
+<script>
+function simulateCustomRedaction() {
+  document.querySelectorAll('.secret-tag').forEach(el => {
+    el.style.background = '#1e293b';
+    el.style.color = '#38bdf8';
+    el.textContent = '[CUSTOM_SECRET_1]';
+  });
+  document.getElementById('proof-panel').style.display = 'block';
+}
+
+function resetTerms() {
+  location.reload();
+}
+</script>
+</body>
+</html>

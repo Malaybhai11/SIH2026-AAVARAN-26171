@@ -19,12 +19,74 @@ import { perception, ensureOffscreen } from "./perceptionClient.js";
 import { Vault, detectRuleSpans, applySpans, hasResidualPII, redactText, scrubLog } from "./redact.js";
 import { verifyTokenReleasePolicy } from "./tokenReleasePolicy.js";
 
+export function isTransientNavigationError(err) {
+  const msg = String(err?.message || err || "");
+  return (
+    /back\/forward cache/i.test(msg) ||
+    /message channel is closed/i.test(msg) ||
+    /message port closed/i.test(msg) ||
+    /could not establish connection/i.test(msg) ||
+    /receiving end does not exist/i.test(msg) ||
+    /frame with ID .* does not exist/i.test(msg) ||
+    /no frame with id/i.test(msg)
+  );
+}
+
+export function waitForTabLoad(tabId, timeoutMs = 12000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const check = async () => {
+      try {
+        const t = await chrome?.tabs?.get(tabId);
+        if (t?.status === "complete") return resolve(true);
+      } catch {
+        return resolve(false);
+      }
+      if (Date.now() - start > timeoutMs) return resolve(false);
+      setTimeout(check, 200);
+    };
+    check();
+  });
+}
+
+export async function ensureContentScript(tabId) {
+  try {
+    const tab = await chrome?.tabs?.get(tabId);
+    if (tab?.status === "loading") {
+      await waitForTabLoad(tabId, 8000);
+    }
+  } catch {
+    /* ignore tab check */
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await chrome?.tabs?.sendMessage(tabId, { type: MSG.PING });
+      if (res?.ok) return true;
+    } catch (e) {
+      if (isTransientNavigationError(e)) {
+        await waitForTabLoad(tabId, 5000);
+      }
+    }
+    try {
+      await chrome?.scripting?.executeScript({ target: { tabId }, files: ["content.js"] });
+      await new Promise((r) => setTimeout(r, 200));
+      const res = await chrome?.tabs?.sendMessage(tabId, { type: MSG.PING }).catch(() => null);
+      if (res?.ok) return true;
+    } catch (e) {
+      if (attempt === 2) return false;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  return false;
+}
+
 async function sendToTab(tabId, msg, timeoutMs = 20000, frameId) {
   return Promise.race([
     chrome.tabs.sendMessage(tabId, msg, frameId != null ? { frameId } : undefined),
     new Promise((_, rej) => setTimeout(() => rej(new Error(`${msg.type} timed out after ${timeoutMs}ms`)), timeoutMs)),
   ]);
 }
+
 
 async function capture(windowId, tabId) {
   try {
@@ -74,9 +136,9 @@ function normalizeFrameUrl(u) {
 }
 
 async function extractAllFrames({ tabId, vault, useNer, targetCount }) {
-  const frames = await listFrames(tabId);
-  const byId = new Map(frames.map((f) => [f.frameId, f]));
-  const children = new Map();
+  let frames = await listFrames(tabId);
+  let byId = new Map(frames.map((f) => [f.frameId, f]));
+  let children = new Map();
   for (const f of frames) {
     if (f.frameId === 0) continue;
     if (!children.has(f.parentFrameId)) children.set(f.parentFrameId, []);
@@ -92,9 +154,27 @@ async function extractAllFrames({ tabId, vault, useNer, targetCount }) {
   const queue = [0];
   while (queue.length) {
     const fid = queue.shift();
-    const res = await sendToTab(tabId, { type: MSG.EXTRACT_SNAPSHOT, targetCount, vault: vault.toJSON(), useNer }, fid === 0 ? 20000 : 8000, fid).catch(
-      (e) => ({ ok: false, error: String(e?.message || e) }),
-    );
+    let res = null;
+    const maxTries = fid === 0 ? 3 : 1;
+    for (let tryIdx = 0; tryIdx < maxTries; tryIdx++) {
+      res = await sendToTab(tabId, { type: MSG.EXTRACT_SNAPSHOT, targetCount, vault: vault.toJSON(), useNer }, fid === 0 ? 20000 : 8000, fid).catch(
+        (e) => ({ ok: false, error: String(e?.message || e) }),
+      );
+      if (res?.ok) break;
+      if (fid === 0 && tryIdx < maxTries - 1 && isTransientNavigationError(res?.error)) {
+        await waitForTabLoad(tabId, 5000);
+        await ensureContentScript(tabId);
+        await new Promise((r) => setTimeout(r, 300 * (tryIdx + 1)));
+        frames = await listFrames(tabId);
+        byId = new Map(frames.map((f) => [f.frameId, f]));
+        children.clear();
+        for (const f of frames) {
+          if (f.frameId === 0) continue;
+          if (!children.has(f.parentFrameId)) children.set(f.parentFrameId, []);
+          children.get(f.parentFrameId).push(f.frameId);
+        }
+      }
+    }
     if (!res?.ok) {
       if (fid !== 0) unreachable.push({ frameId: fid, url: byId.get(fid)?.url ?? null, rect: offsets.get(fid) ?? null });
       else rootFailure = res;
@@ -198,9 +278,17 @@ export async function perceiveStep({ tabId, windowId, vault, settings, targetCou
   // the content script calls the engine directly for NER: it must exist first
   await ensureOffscreen();
   // Scan, then capture immediately; if the page scrolled in between, scan again.
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     snapshot = await extractAllFrames({ tabId, vault, useNer, targetCount });
-    if (!snapshot?.ok) return { snapshot, visual: null, timings: {} };
+    if (!snapshot?.ok) {
+      if (attempt < 2 && isTransientNavigationError(snapshot?.error)) {
+        await waitForTabLoad(tabId, 5000);
+        await ensureContentScript(tabId);
+        await new Promise((r) => setTimeout(r, 350));
+        continue;
+      }
+      return { snapshot, visual: null, timings: {} };
+    }
     screenshot = await capture(windowId, tabId);
     const geo = await sendToTab(tabId, { type: MSG.GEOMETRY }, 3000, 0).catch(() => null);
     if (!geo || (geo.scrollY === snapshot.viewport.scrollY && geo.scrollX === snapshot.viewport.scrollX)) break;

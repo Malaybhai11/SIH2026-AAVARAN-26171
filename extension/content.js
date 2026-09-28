@@ -35,9 +35,17 @@ const FAST = { delay: fastDelay, click: fastClick, type: fastType, scroll: (a) =
 
 /** NER through the shared perception engine (offscreen doc / Firefox background). */
 async function nerBatch(texts) {
-  const res = await chrome.runtime.sendMessage({ target: "perception", op: "ner", payload: { texts } });
-  if (!res?.ok) throw new Error(res?.error || "ner failed");
-  return res.result.spans;
+  try {
+    const res = await chrome.runtime.sendMessage({ target: "perception", op: "ner", payload: { texts } });
+    if (!res?.ok) throw new Error(res?.error || "ner failed");
+    return res.result.spans;
+  } catch (err) {
+    if (/back\/forward cache|message channel is closed|message port closed/i.test(String(err?.message || err))) {
+      console.warn("[content] nerBatch channel closed due to bfcache/navigation", err);
+      return [];
+    }
+    throw err;
+  }
 }
 
 async function loadCustomTerms() {
@@ -493,3 +501,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 console.debug("[content] ready on", location.hostname);
+
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {
+    console.debug("[content] page restored from bfcache on", location.hostname);
+  }
+});

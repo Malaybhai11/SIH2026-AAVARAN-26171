@@ -21,6 +21,9 @@ import {
   backgroundNerTag,
   checkTokenRelease,
   needsScreenshot,
+  isTransientNavigationError,
+  waitForTabLoad,
+  ensureContentScript,
 } from "./lib/privacyPipeline.js";
 
 const SETTINGS_KEY = "agentSettings";
@@ -374,23 +377,6 @@ function notifyTaskComplete(status, summary) {
   }
 }
 
-function waitForTabLoad(tabId, timeoutMs = 12000) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const check = async () => {
-      try {
-        const t = await chrome.tabs.get(tabId);
-        if (t.status === "complete") return resolve(true);
-      } catch (e) {
-        return resolve(false);
-      }
-      if (Date.now() - start > timeoutMs) return resolve(false);
-      setTimeout(check, 250);
-    };
-    check();
-  });
-}
-
 async function getOpenTabs(sub) {
   try {
     const tabs = await chrome.tabs.query({ windowId: sub.windowId });
@@ -521,7 +507,12 @@ async function dispatchAction(sub, action, securityContext = {}) {
     chrome.tabs.sendMessage(sub.tabId, { type: MSG.EXECUTE_ACTION, action: localAction, humanize: !!STATE.settings?.humanize }, { frameId }),
     DEFAULTS.iterationTimeoutMs,
     "content-action",
-  );
+  ).catch((e) => {
+    if (isTransientNavigationError(e)) {
+      return { ok: true, navigated: true };
+    }
+    return { ok: false, error: e.message };
+  });
 }
 
 function dedupeKey(item) {
@@ -562,23 +553,6 @@ async function captureScreenshot(sub) {
   } catch (e) {
     subLog(sub, `screenshot unavailable (${e.message}); vision falls back to DOM heuristics`, "warn");
     return null;
-  }
-}
-
-async function ensureContentScript(tabId) {
-  try {
-    const res = await chrome.tabs.sendMessage(tabId, { type: MSG.PING });
-    if (res?.ok) return true;
-  } catch (e) {
-    /* not injected yet */
-  }
-  try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
-    await new Promise((r) => setTimeout(r, 300));
-    return true;
-  } catch (e) {
-    log(`cannot inject content script: ${e.message}`, "error");
-    return false;
   }
 }
 
@@ -965,6 +939,14 @@ async function runSubLoop(sub, ctx) {
     sub.status = STATUS.PERCEIVING;
     await ctx.onUpdate();
 
+    // Settle if the previous action (e.g. click/submit) triggered a page navigation
+    try {
+      const tab = await chrome.tabs.get(sub.tabId);
+      if (tab?.status === "loading") {
+        await waitForTabLoad(sub.tabId, 8000);
+      }
+    } catch {}
+
     // Re-inject after navigations / SPA route changes.
     if (!(await ensureContentScript(sub.tabId))) {
       sub.status = STATUS.ERROR;
@@ -984,26 +966,44 @@ async function runSubLoop(sub, ctx) {
     let snapshot;
     let visual;
     let ptimings;
-    try {
-      ({ snapshot, visual, timings: ptimings } = await perceiveStep({
-        tabId: sub.tabId,
-        windowId: sub.windowId,
-        vault: VAULT,
-        settings: iterSettings,
-        targetCount: sub.targetCount,
-      }));
-    } catch (e) {
-      sub.status = STATUS.ERROR;
-      sub.error = `perception failed: ${e.message}`;
-      subLog(sub, sub.error, "error");
+    for (let pRetry = 0; pRetry < 3; pRetry++) {
+      try {
+        ({ snapshot, visual, timings: ptimings } = await perceiveStep({
+          tabId: sub.tabId,
+          windowId: sub.windowId,
+          vault: VAULT,
+          settings: iterSettings,
+          targetCount: sub.targetCount,
+        }));
+      } catch (e) {
+        if (pRetry < 2 && isTransientNavigationError(e)) {
+          subLog(sub, `perception retry ${pRetry + 1}/2: page navigating (${e.message})`, "warn");
+          await waitForTabLoad(sub.tabId, 5000);
+          await ensureContentScript(sub.tabId);
+          await new Promise((r) => setTimeout(r, 400));
+          continue;
+        }
+        sub.status = STATUS.ERROR;
+        sub.error = `perception failed: ${e.message}`;
+        subLog(sub, sub.error, "error");
+        break;
+      }
+      if (!snapshot?.ok) {
+        if (pRetry < 2 && isTransientNavigationError(snapshot?.error)) {
+          subLog(sub, `perception retry ${pRetry + 1}/2: page navigating (${snapshot?.error})`, "warn");
+          await waitForTabLoad(sub.tabId, 5000);
+          await ensureContentScript(sub.tabId);
+          await new Promise((r) => setTimeout(r, 400));
+          continue;
+        }
+        sub.status = STATUS.ERROR;
+        sub.error = `perception failed: ${snapshot?.error ?? "unknown"}`;
+        subLog(sub, sub.error, "error");
+        break;
+      }
       break;
     }
-    if (!snapshot?.ok) {
-      sub.status = STATUS.ERROR;
-      sub.error = `perception failed: ${snapshot?.error ?? "unknown"}`;
-      subLog(sub, sub.error, "error");
-      break;
-    }
+    if (sub.status === STATUS.ERROR) break;
     if (visual?.error) subLog(sub, `vision degraded: ${visual.error}`, "warn");
     sub.lastVisual = visual && { ...visual, redactedImage: undefined };
     sub.lastRedactedImage = visual?.redactedImage ?? null;
@@ -1975,12 +1975,27 @@ async function privacyPreview({ tabId, mode }) {
   if (tabId) tab = await chrome.tabs.get(tabId);
   else [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab?.id) return { ok: false, error: "no active tab" };
+  try {
+    const t = await chrome.tabs.get(tab.id);
+    if (t?.status === "loading") await waitForTabLoad(tab.id, 5000);
+  } catch {}
   if (!(await ensureContentScript(tab.id))) return { ok: false, error: "cannot access this page" };
   const settings = { ...(await loadSettings()), ...(mode ? { perceptionMode: mode } : {}) };
   const vault = new Vault(null, { mode: settings.redactionMode });
   const t0 = performance.now();
-  const { snapshot, visual, timings } = await perceiveStep({ tabId: tab.id, windowId: tab.windowId, vault, settings, targetCount: 0 });
-  if (!snapshot?.ok) return { ok: false, error: snapshot?.error ?? "perception failed" };
+  let step = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    step = await perceiveStep({ tabId: tab.id, windowId: tab.windowId, vault, settings, targetCount: 0 });
+    if (step.snapshot?.ok) break;
+    if (attempt < 2 && isTransientNavigationError(step.snapshot?.error)) {
+      await waitForTabLoad(tab.id, 4000);
+      await ensureContentScript(tab.id);
+      await new Promise((r) => setTimeout(r, 350));
+      continue;
+    }
+    return { ok: false, error: step.snapshot?.error ?? "perception failed" };
+  }
+  const { snapshot, visual, timings } = step;
   const scale = snapshot.viewport.dpr || 1;
   const css = (b) => ({ x: b.x / scale, y: b.y / scale, w: b.w / scale, h: b.h / scale });
   const stats = await perception("stats").catch(() => null);

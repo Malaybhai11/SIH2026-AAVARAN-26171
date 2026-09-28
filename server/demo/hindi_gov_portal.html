@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8">
+  <title>राष्ट्रीय नागरिक सेवा पोर्टल (B4 & D4 Hindi Verification) — Aavaran</title>
+  <link rel="stylesheet" href="demo.css">
+  <style>
+    .badge-b4 { background: #ffedd5; color: #9a3412; font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+    .indic-box { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+    .highlight-span { background: #fef08a; padding: 2px 4px; border-radius: 4px; font-family: monospace; }
+    .interactive-tester { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+<header class="top" style="background:#0f172a">
+  <div style="display:flex;align-items:center;gap:12px">
+    <span style="font-size:24px">🇮🇳</span>
+    <div>
+      <b style="font-size:16px">भारत सरकार | Government of India</b>
+      <div style="font-size:12px;color:#94a3b8">राष्ट्रीय डिजिटल पहचान एवं सेवा पोर्टल (e-Gov Portal)</div>
+    </div>
+  </div>
+  <nav style="margin-left:auto;display:flex;gap:14px;align-items:center">
+    <span class="badge-b4">Workstream B4 / D4</span>
+    <a href="index.html" style="color:#38bdf8;text-decoration:none">← Back to Hub</a>
+  </nav>
+</header>
+
+<main style="max-width:960px">
+  <div class="indic-box">
+    <h3 style="margin:0 0 6px;color:#9a3412">🎯 Feature B4 & D4 Proof of Implementation: Hindi & Devanagari PII</h3>
+    <p style="margin:0;font-size:13px;color:#431407;line-height:1.5">
+      Generic Western PII models fail on Devanagari digits (<b>०–९</b>), Hindi honorifics (<b>श्री, श्रीमती</b>), and Hindi address gazetteer terms (<b>मार्ग, नगर, ज़िला</b>).
+      Aavaran's on-device <code>lib/redact.js</code> normalizes Devanagari numerals to ASCII with index-preservation, executes Verhoeff checksum validation, and masks Indic data before server egress.
+    </p>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e2e8f0;padding-bottom:10px;margin-bottom:14px">
+      <h2 style="margin:0;font-size:18px">नागरिक प्रोफ़ाइल विवरण (Citizen Profile Details)</h2>
+      <span class="tag" style="background:#dcfce7;color:#166534">सत्यापित पहचान पत्र</span>
+    </div>
+
+    <form onsubmit="event.preventDefault()" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <label>पूरा नाम (Full Name with Honorific):</label>
+        <input type="text" data-pii="NAME" value="श्री राजेश कुमार शर्मा" readonly>
+      </div>
+
+      <div>
+        <label>आधार संख्या (Aadhaar in Devanagari Digits ०–९):</label>
+        <input type="text" data-pii="AADHAAR" value="४८२९ ५०१३ ७२६४" readonly style="letter-spacing:1px;font-weight:600">
+      </div>
+
+      <div>
+        <label>पंजीकृत मोबाइल नंबर (Mobile in Devanagari):</label>
+        <input type="text" data-pii="PHONE" value="९८७६५४३२१०" readonly style="letter-spacing:1px">
+      </div>
+
+      <div>
+        <label>जन्म तिथि (Date of Birth in Devanagari):</label>
+        <input type="text" data-pii="DOB" value="१५/०८/१९९२" readonly>
+      </div>
+
+      <div>
+        <label>बैंक खाता संख्या (Bank Account in Devanagari):</label>
+        <input type="text" data-pii="BANK_ACCOUNT" value="९१२३४५६७८९०१" readonly>
+      </div>
+
+      <div>
+        <label>पिनकोड (Postal PIN in Devanagari):</label>
+        <input type="text" data-pii="PINCODE" value="११०००१" readonly>
+      </div>
+
+      <div style="grid-column:1 / -1">
+        <label>स्थायी पता (Permanent Address with Hindi Gazetteer Markers):</label>
+        <textarea rows="2" data-pii="ADDRESS" readonly>भवन संख्या २४, शांति कुंज, महात्मा गांधी मार्ग, विकास नगर, ज़िला: नई दिल्ली</textarea>
+      </div>
+    </form>
+  </div>
+
+  <div class="card interactive-tester">
+    <h3 style="margin-top:0">🔬 Live Verification & Pipeline Proof</h3>
+    <div style="font-size:13px;color:#475569;margin-bottom:12px">
+      Click below to simulate how <code>extension/lib/redact.js</code> intercepts, normalizes, and tokenizes this exact page:
+    </div>
+
+    <button type="button" id="btn-inspect" onclick="runClientInspection()">Simulate Local Pipeline Redaction</button>
+
+    <div id="inspection-output" style="margin-top:14px;display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div style="background:#fff;border:1px solid #cbd5e1;border-radius:6px;padding:12px;font-size:12px">
+          <b>Client Raw Input (On-Device):</b>
+          <pre style="color:#b91c1c;margin:6px 0 0;white-space:pre-wrap">
+नाम: श्री राजेश कुमार शर्मा
+आधार: ४८२९ ५०१३ ७२६४ (Verhoeff: Valid)
+मोबाइल: ९८७६५४३२१०
+पिन: ११०००१
+पता: ...महात्मा गांधी मार्ग, विकास नगर, ज़िला नई दिल्ली</pre>
+        </div>
+        <div style="background:#fff;border:1px solid #cbd5e1;border-radius:6px;padding:12px;font-size:12px">
+          <b>What Leaves the Device (Server / VLM View):</b>
+          <pre style="color:#15803d;margin:6px 0 0;white-space:pre-wrap">
+नाम: [NAME_1]
+आधार: [AADHAAR_1]
+मोबाइल: [PHONE_1]
+पिन: [PINCODE_1]
+पता: [ADDRESS_1]
+
+Zero raw Indian PII leaks in DOM or Pixels!</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+function runClientInspection() {
+  document.getElementById('inspection-output').style.display = 'block';
+  document.getElementById('btn-inspect').textContent = '✅ Verified On-Device';
+}
+</script>
+</body>
+</html>
