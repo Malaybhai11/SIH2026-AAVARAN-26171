@@ -22,6 +22,27 @@ import time
 from collections import deque
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_dotenv() -> None:
+    # This module reads AUDIT_LOG/AUDIT_IMAGES from os.environ below at import time,
+    # so it must not depend on server.llm.client (or anything else) having already
+    # parsed .env first — agent_step.py imports this module before client.py, which
+    # previously meant AUDIT was always frozen False regardless of .env's contents.
+    p = _ROOT / ".env"
+    if not p.exists():
+        return
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 AUDIT = os.environ.get("AUDIT_LOG", "").lower() in {"1", "true", "yes"}
 AUDIT_IMAGES = os.environ.get("AUDIT_IMAGES", "").lower() in {"1", "true", "yes"}
 AUDIT_DIR = Path(__file__).resolve().parent
@@ -70,7 +91,7 @@ def record_request(raw: dict) -> dict:
 
     AUDIT_DIR.mkdir(exist_ok=True)
     _rotate_if_needed()
-    with open(AUDIT_DIR / LOG_NAME, "a") as f:
+    with open(AUDIT_DIR / LOG_NAME, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     if img and AUDIT_IMAGES:
@@ -90,7 +111,7 @@ def tail_entries(n: int = 100) -> list[dict]:
     if not p.exists():
         return []
     buf: deque = deque(maxlen=n)
-    with open(p, "r") as f:
+    with open(p, "r", encoding="utf-8") as f:
         for line in f:
             buf.append(line)
     out = []
