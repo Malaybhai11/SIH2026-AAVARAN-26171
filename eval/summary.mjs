@@ -10,6 +10,12 @@ import { readFile, writeFile } from "node:fs/promises";
 const j = async (f) => JSON.parse(await readFile(`eval/results/${f}`, "utf8").catch(() => "null"));
 const [pii, faces, red, screens, lat] = await Promise.all(["pii.json", "faces.json", "redaction.json", "screens.json", "latency.json"].map(j));
 const tasks = lat?.e2eTasks ?? {};
+const e2eTotalLeaks = Object.values(tasks).reduce((a, v) => a + (v.leaks || 0), 0);
+const e2eAllPassed = Object.keys(tasks).length > 0 && Object.values(tasks).every((v) => v.passed);
+// The label only claims "all passed, 0 leaks" when the underlying per-task data
+// actually says so — it used to be hardcoded regardless of real results, so a
+// failed or leaking task run could still print a false clean-sweep claim here.
+const e2eLabel = e2eAllPassed && e2eTotalLeaks === 0 ? ", all passed, 0 leaks" : "";
 
 const s = {
   criterion1_visualContext: screens && {
@@ -41,13 +47,14 @@ Generated ${new Date().toISOString().slice(0, 10)} from \`eval/results/*.json\`.
 | 4. Client resources (20%) | Engine memory (WASM+weights), eco / balanced | ${lat?.modes.eco?.engineMemoryMB} MB / ${lat?.modes.balanced?.engineMemoryMB} MB |
 | | Perception per step, median (p90), eco / balanced | ${lat?.modes.eco?.warmStepMs.median} (${lat?.modes.eco?.warmStepMs.p90}) ms / ${lat?.modes.balanced?.warmStepMs.median} (${lat?.modes.balanced?.warmStepMs.p90}) ms |
 | | Unchanged frame (dHash cache) | ${lat?.modes.balanced?.unchangedFrameMs.median} ms |
-| 5. End-to-end latency (15%) | Demo tasks (wall clock, all passed, 0 leaks) | ${Object.entries(tasks).map(([k, v]) => `${k} ${(v.wallMs / 1000).toFixed(1)} s`).join(" · ")} |
+| 5. End-to-end latency (15%) | Demo tasks (wall clock${e2eLabel}) | ${Object.entries(tasks).map(([k, v]) => `${k} ${(v.wallMs / 1000).toFixed(1)} s`).join(" · ")} |
 
-Privacy check on every task run: the server's own audit log is searched for each of the user's raw values — **${Object.values(tasks).reduce((a, v) => a + (v.leaks || 0), 0)} leaks** across ${Object.keys(tasks).length} tasks.
+Privacy check on every task run: the server's own audit log is searched for each of the user's raw values — **${e2eTotalLeaks} leaks** across ${Object.keys(tasks).length} tasks.
 `;
 function pctf(x) {
   return x == null ? "n/a" : `${(x * 100).toFixed(1)}%`;
 }
+
 await writeFile("eval/results/summary.json", JSON.stringify(s, null, 2));
 await writeFile("eval/results/SUMMARY.md", md);
 console.log(md);
