@@ -260,9 +260,15 @@ const RULES = [
   { type: "EMAIL", re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/g },
   // UPI VPA: handle@psp, no dot-TLD after the @ part
   { type: "UPI", re: /\b[A-Za-z0-9][A-Za-z0-9._-]{1,63}@(?:ok)?[A-Za-z]{2,15}\b(?![.@-]\w)/g, valid: (v) => !/@(?:gmail|yahoo|outlook|hotmail)$/i.test(v) },
-  { type: "PASSWORD", re: /\b(?:password|passwd|pwd|passcode|pin)\s*(?:is\s*|:\s*|=\s*|-\s*|\s)(?:being\s+)?(\S{4,64})/gi, group: 1, valid: (v) => /\d/.test(v) || /[^A-Za-z]/.test(v) || /[a-z][A-Z]/.test(v) },
-  // random-looking credentials in prose (mixed case + digits, many class switches)
-  { type: "SECRET", re: /\b(?=[A-Za-z0-9_]*[a-z])(?=[A-Za-z0-9_]*[A-Z])(?=[A-Za-z0-9_]*\d)[A-Za-z0-9_]{10,40}\b/g, valid: (v) => (v.match(/[a-z][A-Z]|[A-Z][a-z]|[A-Za-z]\d|\d[A-Za-z]/g) || []).length >= 6 && !/^[A-Z][a-z]+(?:[A-Z][a-z]+)+\d*$/.test(v) },
+  // Up to 4 space-separated tokens: a bare \S{4,64} only captured the FIRST word,
+  // so a multi-word passphrase ("password is correct horse battery staple") leaked
+  // every word after the first straight past redaction.
+  { type: "PASSWORD", re: /\b(?:password|passwd|pwd|passcode|pin)\s*(?:is\s*|:\s*|=\s*|-\s*|\s)(?:being\s+)?(\S{4,64}(?:\s\S{1,32}){0,3})/gi, group: 1, valid: (v) => /\d/.test(v) || /[^A-Za-z]/.test(v) || /[a-z][A-Z]/.test(v) },
+  // random-looking credentials in prose (mixed case + digits, many class switches).
+  // `weak: true` — an entropy heuristic, not a validated/checksummed format like
+  // Aadhaar or a card number, so it should NOT automatically outrank an overlapping
+  // NER span the way every other rule here does (see resolveOverlaps below).
+  { type: "SECRET", weak: true, re: /\b(?=[A-Za-z0-9_]*[a-z])(?=[A-Za-z0-9_]*[A-Z])(?=[A-Za-z0-9_]*\d)[A-Za-z0-9_]{10,40}\b/g, valid: (v) => (v.match(/[a-z][A-Z]|[A-Z][a-z]|[A-Za-z]\d|\d[A-Za-z]/g) || []).length >= 6 && !/^[A-Z][a-z]+(?:[A-Z][a-z]+)+\d*$/.test(v) },
   { type: "OTP", re: /\b(?:OTP|one[- ]time (?:password|code)|verification code|security code|auth(?:entication)? code)\b[^0-9\n]{0,24}(\d{4,8})\b/gi, group: 1 },
   { type: "OTP", re: /\b(\d{4,8})\s+is\s+(?:your|the)\s+(?:OTP|one[- ]time|verification code|code)/gi, group: 1 },
   { type: "CVV", re: /\b(?:CVV|CVC|CVV2|card verification(?: value| code)?|security code)\b\s*(?:no\.?|number|code)?\s*(?:is|being|:|=|-|\()?\s*(\d{3,4})\b/gi, group: 1 },
@@ -387,19 +393,23 @@ export function detectRuleSpans(text) {
       // letters) — same behaviour as the pre-existing Devanagari-digit case: it's
       // the canonical value a Vault/rehydration step should reason about, not the
       // attacker's raw on-page encoding of it.
-      spans.push({ start, end, type: rule.type, value: trimmed, source: "rule" });
+      spans.push({ start, end, type: rule.type, value: trimmed, source: "rule", weak: !!rule.weak });
     }
   }
   return resolveOverlaps(spans);
 }
 
-/** Keep a non-overlapping set: rules beat NER; then longer beats shorter; then rule order. */
+/** Keep a non-overlapping set: rules beat NER; then longer beats shorter; then rule order.
+ * Exception: a `weak` rule (an entropy heuristic, not a validated/checksummed format)
+ * does NOT automatically beat NER — it ties with it, so a short/over-eager weak-rule
+ * match can't suppress a longer, higher-confidence NER span the length tiebreak below
+ * would otherwise have preferred. */
 export function resolveOverlaps(spans) {
   const ranked = spans
     .map((s, i) => ({ s, i }))
     .sort((a, b) => {
-      const ra = a.s.source === "rule" ? 0 : 1;
-      const rb = b.s.source === "rule" ? 0 : 1;
+      const ra = a.s.source === "rule" && !a.s.weak ? 0 : 1;
+      const rb = b.s.source === "rule" && !b.s.weak ? 0 : 1;
       if (ra !== rb) return ra - rb;
       const la = a.s.end - a.s.start;
       const lb = b.s.end - b.s.start;
@@ -614,6 +624,24 @@ export class Vault {
   /** "TYPE_n" for a minted token/surrogate — used to label pixel-redaction boxes. */
   labelFor(tok) {
     return this.labels.get(tok) ?? (tok.startsWith("[") && tok.endsWith("]") ? tok.slice(1, -1) : tok);
+  }
+  /**
+   * A numbered "TYPE_n" label for pixel-only boxes (highly-sensitive field values —
+   * CARD/CVV/PASSWORD/OTP — that must never be registered as a releasable token: the
+   * DOM text layer never exposes their raw value, so they have no business being
+   * resolvable back into a page). Consistent per-value within a page, same counter
+   * namespace as tokenFor's, but never touches values/map/provenance/origins, so
+   * resolve()/rehydration can never turn this label back into the real value.
+   */
+  labelOnly(type, value) {
+    const key = `${type}:${normKey(type, value)}`;
+    let label = this.pixelLabels?.get(key);
+    if (!label) {
+      this.counters[type] = (this.counters[type] || 0) + 1;
+      label = `${type}_${this.counters[type]}`;
+      (this.pixelLabels ??= new Map()).set(key, label);
+    }
+    return label;
   }
   /** Replace every known token/surrogate in `s` with its real value (client-side, at execution). */
   resolve(s) {
