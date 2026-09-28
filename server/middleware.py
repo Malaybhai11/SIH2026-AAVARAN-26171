@@ -122,14 +122,18 @@ class RateLimitMiddleware:
 
 
 class SecurityHeadersMiddleware:
-    """Baseline headers for a server that only ever returns JSON or its own demo HTML
-    (never embeds or is embedded by third-party content)."""
+    """Baseline headers for the real API/audit surface, which never embeds or is
+    embedded by third-party content — except /demo/, whose fixture pages simulate
+    real websites for the extension to redact, and one of them (checkout_iframe.html)
+    deliberately iframes another (payment_widget.html) to exercise D1's cross-origin
+    iframe redaction. X-Frame-Options: DENY there would block that demo outright."""
 
     _HEADERS = [
         (b"x-content-type-options", b"nosniff"),
         (b"x-frame-options", b"DENY"),
         (b"referrer-policy", b"no-referrer"),
     ]
+    _NO_FRAME_DENY_PREFIX = "/demo/"
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -139,10 +143,13 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
+        skip_frame_deny = scope.get("path", "").startswith(self._NO_FRAME_DENY_PREFIX)
+
         async def send_wrapper(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers") or [])
-                headers.extend(self._HEADERS)
+                extra = [h for h in self._HEADERS if not (skip_frame_deny and h[0] == b"x-frame-options")]
+                headers.extend(extra)
                 message = {**message, "headers": headers}
             await send(message)
 
